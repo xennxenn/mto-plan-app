@@ -5,7 +5,6 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 
 // --- Firebase Initialization (Online Production) ---
-// ใช้ Config ของคุณเอง 100% บังคับตัดจากระบบทดสอบ
 const firebaseConfig = {
   apiKey: "AIzaSyBRehvxbOiCs9M2i2Wk5HswLsRWCCtDEws",
   authDomain: "mto-plan-app.firebaseapp.com",
@@ -30,13 +29,18 @@ const loadScript = (src) => new Promise((resolve, reject) => {
 const FIELD_MAP = { 'พื้นที่ด้านซ้าย': 'left', 'ความกว้างเฟรม': 'frameWidth', 'พื้นที่ด้านขวา': 'right', 'พื้นที่ด้านบน': 'top', 'ความสูงเฟรม': 'frameHeight', 'พื้นที่ด้านล่าง': 'bottom', 'ความสูงเต็ม': 'totalHeight', 'ความกว้างเต็ม': 'totalWidth' };
 const FIELD_NAMES_REVERSE = Object.keys(FIELD_MAP).reduce((acc, key) => { acc[FIELD_MAP[key]] = key; return acc; }, {});
 
+// 🧠 NLP Dictionary: คลังคำพ้องเสียงที่ไมค์มักจะได้ยินเพี้ยน (จัดเต็มทุกคำที่เป็นไปได้)
 const VOICE_FIELDS = [
-  { key: 'totalWidth', matchers: ['กว้างเต็ม', 'เต็มกว้าง'] }, { key: 'totalHeight', matchers: ['สูงเต็ม', 'เต็มสูง'] },
-  { key: 'frameWidth', matchers: ['กว้างเฟรม', 'เฟรมกว้าง', 'กว้าง'] }, { key: 'frameHeight', matchers: ['สูงเฟรม', 'เฟรมสูง', 'สูง'] },
-  { key: 'left', matchers: ['ซ้าย', 'สาย', 'ซาย'] }, { key: 'right', matchers: ['ขวา', 'คว้า', 'คว่า', 'ปลา'] },
-  { key: 'top', matchers: ['บน', 'บ่น', 'ปน'] }, { key: 'bottom', matchers: ['ล่าง', 'ล้าง', 'ร่าง', 'ลาง', 'ทาง', 'กาง', 'ว่าง'] }
+  { key: 'totalWidth', matchers: ['กว้างเต็ม', 'เต็มกว้าง', 'ความกว้างเต็ม', 'ขวางเต็ม', 'กวางเต็ม', 'รวมกว้าง', 'กว้างรวม'] },
+  { key: 'totalHeight', matchers: ['สูงเต็ม', 'เต็มสูง', 'ความสูงเต็ม', 'ซูงเต็ม', 'สู้งเต็ม', 'รวมสูง', 'สูงรวม'] },
+  { key: 'frameWidth', matchers: ['กว้างเฟรม', 'เฟรมกว้าง', 'ความกว้างเฟรม', 'กว้าง', 'กวาง', 'ขวาง', 'คว้าง', 'ความกว้าง', 'กาง', 'ว่าง'] },
+  { key: 'frameHeight', matchers: ['สูงเฟรม', 'เฟรมสูง', 'ความสูงเฟรม', 'สูง', 'ซูง', 'สู้ง', 'ฝูง', 'จูง', 'ความสูง', 'ถุง'] },
+  { key: 'left', matchers: ['ซ้าย', 'สาย', 'ซาย', 'ชาย', 'ตาย', 'ถ่าย', 'ท้าย', 'ป้าย', 'คล้าย', 'ซ้ายมือ', 'ย้าย', 'ร้าย', 'ด้านซ้าย'] },
+  { key: 'right', matchers: ['ขวา', 'คว้า', 'คว่า', 'ปลา', 'ขา', 'ฝา', 'ฟ้า', 'หา', 'ปา', 'หว่า', 'ขวามือ', 'ผา', 'ด้านขวา'] },
+  { key: 'top', matchers: ['บน', 'บ่น', 'ปน', 'คน', 'ทน', 'ชน', 'มนต์', 'วน', 'ด้านบน', 'ข้างบน', 'ยอด', 'หล่น', 'ผล'] },
+  { key: 'bottom', matchers: ['ล่าง', 'ล้าง', 'ร่าง', 'ลาง', 'ทาง', 'สร้าง', 'ช้าง', 'ราง', 'บาง', 'ด้านล่าง', 'ข้างล่าง', 'พื้น', 'ห้าง'] }
 ];
-const DEFAULT_OBSTACLES = ["ปลั๊กไฟ", "บิ้วอิน", "ตู้", "โคมไฟ", "แอร์", "เสา"];
+const DEFAULT_OBSTACLES = ["ปลั๊กไฟ", "ปลั๊ก", "บิ้วอิน", "ตู้", "โคมไฟ", "แอร์", "เสา", "สวิตช์", "สายไฟ"];
 
 export default function App() {
   // --- App States ---
@@ -104,7 +108,7 @@ export default function App() {
       try {
         await signInAnonymously(auth);
       } catch (error) { 
-        setErrorMessage("ไม่สามารถเชื่อมต่อระบบบัญชีได้: กรุณาไปที่เว็บ Firebase และเปิดใช้งาน Anonymous Auth"); 
+        setErrorMessage("ไม่สามารถเชื่อมต่อระบบบัญชีได้: กรุณาเปิดใช้งาน Anonymous Auth ใน Firebase"); 
       }
     };
     initAuth();
@@ -189,6 +193,7 @@ export default function App() {
 
   const addLog = (text, type = 'user') => setLogs(prev => [...prev.slice(-4), { text, type, time: new Date().toLocaleTimeString() }]);
 
+  // 🗣️ ระบบตอบกลับเสียง (ลดเวลาหน่วง ไม่ให้ไมค์ดับนาน)
   const speak = (text) => {
     setSpeechFeedback(text);
     if ('speechSynthesis' in window) {
@@ -197,68 +202,91 @@ export default function App() {
       isSpeakingRef.current = true; 
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'th-TH';
-      const estimatedTime = Math.max(2000, text.length * 150);
+      
+      const estimatedTime = Math.max(1000, text.length * 80);
       speakingTimeoutRef.current = setTimeout(() => { isSpeakingRef.current = false; }, estimatedTime);
       utterance.onend = () => { clearTimeout(speakingTimeoutRef.current); isSpeakingRef.current = false; };
       utterance.onerror = () => { clearTimeout(speakingTimeoutRef.current); isSpeakingRef.current = false; };
+      
       window.speechSynthesis.speak(utterance);
     }
   };
 
-  const extractNumber = (text) => { const match = text.match(/-?\d+(\.\d+)?/); return match ? parseFloat(match[0]) : null; };
-
-  // --- Voice Engine ---
+  // --- สมองกล NLP จัดการคำสั่งเสียง ---
   const handleVoiceCommand = (command) => {
     let rawCommand = command.trim().replace(/\.$/, '');
-    let cleanCommand = rawCommand.replace(/ซม\.|ซม|เซนติเมตร|cm/gi, '').trim();
-    if (!cleanCommand) return; 
-    addLog(`ได้ยิน: "${cleanCommand}"`, 'user');
+    addLog(`🎙️ ได้ยิน: "${rawCommand}"`, 'user'); 
 
-    let lowerCommand = cleanCommand.toLowerCase()
-      .replace(/ศูนย์|ศูน|สูน|สูญ|โอ/g, '0').replace(/\bo\b/ig, '0')
+    // 1. ทำความสะอาดข้อความ ลบหน่วย และคำลงท้าย
+    let proc = rawCommand.toLowerCase()
+      .replace(/(ครับ|ค่ะ|จ้ะ|จ้า|นะ|ฮะ|เลย)$/g, '')
+      .replace(/\s*(ซม\.|ซม|เซนติเมตร|cm|มิลลิเมตร|มิล|mm\.|mm|เมตร|m\.|m)\s*/gi, '')
+      .replace(/(\d+)\s*(จุด|ดอท)\s*(\d+)/g, '$1.$2') // "50 จุด 5" -> "50.5"
+      .replace(/(\d+)\s*ครึ่ง/g, '$1.5') // "150 ครึ่ง" -> "150.5"
       .replace(/๐/g, '0').replace(/๑/g, '1').replace(/๒/g, '2').replace(/๓/g, '3')
       .replace(/๔/g, '4').replace(/๕/g, '5').replace(/๖/g, '6').replace(/๗/g, '7')
-      .replace(/๘/g, '8').replace(/๙/g, '9').replace(/จุด/g, '.');
+      .replace(/๘/g, '8').replace(/๙/g, '9')
+      .replace(/ศูนย์/g, '0').replace(/เอ็ด/g, '1').replace(/ยี่/g, '2')
+      .trim();
+
+    if (!proc) return;
 
     const activeProject = projects.find(p => p.id === activeProjectId);
-    if (!activeProject) return;
+    if (!activeProject) {
+      speak("กรุณาเลือกหรือสร้างโครงการก่อนครับ");
+      return;
+    }
 
-    // Dictation Mode
+    // --- โหมดจดหมายเหตุ (อัดเสียงต่อเนื่อง) ---
     if (activeItemId && activeRoomId) {
       const rIdx = activeProject.rooms.findIndex(r => r.id === activeRoomId);
       const iIdx = activeProject.rooms[rIdx].items.findIndex(i => i.id === activeItemId);
 
       if (isDictatingRemark) {
-        if (lowerCommand.match(/^(เสร็จ|เสร็จสิ้น|พอแล้ว|เรียบร้อย)$/i)) {
-          setIsDictatingRemark(false); speak("บันทึกหมายเหตุเสร็จสิ้น"); addLog("หยุดบันทึกหมายเหตุ", "system");
+        if (proc.match(/^(เสร็จ|เสร็จสิ้น|พอแล้ว|เรียบร้อย)$/i)) {
+          setIsDictatingRemark(false); 
+          speak("บันทึกหมายเหตุเสร็จสิ้น"); 
+          addLog("หยุดบันทึกหมายเหตุ", "system");
         } else {
           const newProj = JSON.parse(JSON.stringify(activeProject));
           const currentRemark = newProj.rooms[rIdx].items[iIdx].measurements.remark || '';
-          newProj.rooms[rIdx].items[iIdx].measurements.remark = currentRemark ? currentRemark + ' ' + cleanCommand : cleanCommand;
-          saveProject(newProj); speak(`เพิ่มข้อความแล้ว`); addLog(`หมายเหตุ: ${cleanCommand}`, 'system');
+          newProj.rooms[rIdx].items[iIdx].measurements.remark = currentRemark ? currentRemark + ' ' + rawCommand : rawCommand;
+          saveProject(newProj); 
+          speak(`เพิ่มข้อความแล้ว`); 
+          addLog(`หมายเหตุ: ${rawCommand}`, 'system');
         }
         return;
       }
 
-      if (lowerCommand.indexOf('หมายเหตุ') === 0) {
+      if (proc.match(/^(หมายเหตุ|จดหมายเหตุ|บันทึกย่อ|เพิ่มข้อความ|เพิ่มเติม)/)) {
         setIsDictatingRemark(true);
-        let initialText = cleanCommand.substring(8).trim();
+        let initialText = rawCommand.replace(/^(หมายเหตุ|จดหมายเหตุ|บันทึกย่อ|เพิ่มข้อความ|เพิ่มเติม)/, '').trim();
         if (initialText.startsWith('ว่า')) initialText = initialText.substring(3).trim();
         if (initialText) {
           const newProj = JSON.parse(JSON.stringify(activeProject));
           const currentRemark = newProj.rooms[rIdx].items[iIdx].measurements.remark || '';
           newProj.rooms[rIdx].items[iIdx].measurements.remark = currentRemark ? currentRemark + ' ' + initialText : initialText;
           saveProject(newProj);
+          speak(`บันทึกหมายเหตุ: ${initialText}`); 
+          addLog(`เริ่มหมายเหตุ: ${initialText}`, "system");
+        } else {
+          speak("เริ่มบันทึกหมายเหตุ พูดข้อความยาวๆ ได้เลยครับ หากเสร็จแล้วให้พูดว่า เสร็จสิ้น"); 
+          addLog("เริ่มบันทึกหมายเหตุ", "system");
         }
-        speak("เริ่มบันทึกหมายเหตุ พูดได้เลยครับ หากเสร็จแล้วให้พูดว่า เสร็จสิ้น"); addLog("เริ่มบันทึกหมายเหตุ", "system");
         return;
       }
     }
 
-    const normalizeName = (name) => name.toLowerCase().replace(/\s+/g, '').replace(/บ้าน|ปาน|บาง/g, 'บาน').replace(/หนึ่ง|เอ็ด/g, '1').replace(/สอง/g, '2').replace(/สาม/g, '3').replace(/สี่/g, '4').replace(/ห้า/g, '5').replace(/หก/g, '6').replace(/เจ็ด/g, '7').replace(/แปด/g, '8').replace(/เก้า/g, '9').replace(/ศูนย์|โอ|o/g, '0');
+    // --- คำสั่งพื้นฐาน (เริ่ม, หยุด, เปรียบเทียบ) ---
+    const normalizeName = (name) => name.toLowerCase().replace(/\s+/g, '')
+      .replace(/บ้าน|ปาน|บาง|พาน|ผ่าน|งาน|การ|ศาล/g, 'บาน').replace(/ที่/g, '')
+      .replace(/หนึ่ง|นึง|เอ็ด/g, '1').replace(/สอง|ยี่/g, '2').replace(/สาม/g, '3')
+      .replace(/สี่|ซี่/g, '4').replace(/ห้า/g, '5').replace(/หก/g, '6')
+      .replace(/เจ็ด/g, '7').replace(/แปด/g, '8').replace(/เก้า/g, '9')
+      .replace(/ศูนย์|โอ|o/g, '0');
 
-    // Command: Start
-    const startMatch = lowerCommand.match(/^(start|สตาร์ท|สตาท|สตาต|เริ่ม|เลิม|เดิม|เติม|เลือก|เลือ|ไปที่)\s*(.*)/i);
+    // ตรวจจับคำสั่งเลือกบาน (Start)
+    const startMatch = proc.match(/^(เริ่ม|เลือก|แก้ไข|แก้|ทำ|ไปที่|เอา)\s*(.*)/i);
     if (startMatch) {
       const targetName = startMatch[2].trim();
       if (!targetName) { speak("กรุณาระบุชื่อบานด้วยครับ"); return; }
@@ -277,146 +305,193 @@ export default function App() {
 
       if (fItemId) {
         setActiveProjectId(fProjId); setActiveRoomId(fRoomId); setActiveItemId(fItemId); setIsDictatingRemark(false);
-        speak(`เริ่มบันทึก ${targetName}`); addLog(`เลือก: ${targetName}`, 'system');
-      } else { speak(`ไม่พบบานชื่อ ${targetName}`); }
+        speak(`เริ่มบันทึก ${targetName}`); addLog(`เลือกบาน: ${targetName}`, 'system');
+      } else { speak(`หาบานชื่อ ${targetName} ไม่เจอครับ`); }
       return;
     }
 
-    // Command: Stop
-    if (lowerCommand.match(/^(stop|สต็อป|หยุด|ยุด|ชุด)$/i) || lowerCommand.includes('หยุดบันทึก')) {
-      setActiveItemId(null); setIsDictatingRemark(false); speak("หยุดการบันทึก"); return;
+    // คำสั่งหยุด (Stop)
+    if (proc.match(/^(stop|สต็อป|หยุด|ยุด|ชุด|พอ|เสร็จ|เสร็จแล้ว)$/i) || proc.includes('หยุดบันทึก')) {
+      setActiveItemId(null); setIsDictatingRemark(false); speak("ออกจากการบันทึกแล้วครับ"); return;
     }
 
-    if (!activeItemId || !activeRoomId || !activeProjectId) return;
+    if (!activeItemId || !activeRoomId) {
+      speak("กรุณาเลือกบานที่จะบันทึกก่อนครับ โดยพูดว่า เริ่ม ตามด้วยชื่อบาน");
+      return;
+    }
 
     const rIdx = activeProject.rooms.findIndex(r => r.id === activeRoomId);
     const iIdx = activeProject.rooms[rIdx].items.findIndex(i => i.id === activeItemId);
     const data = activeProject.rooms[rIdx].items[iIdx].measurements;
     const isInvalid = (val) => val === null || val === undefined || val === '';
 
-    // Command: Compare
-    if (lowerCommand.includes('เทียบ') || lowerCommand.includes('เปรียบ')) {
-      if (lowerCommand.includes('สูง') || lowerCommand.includes('สู้ง')) {
+    // ตรวจสอบความถูกต้อง (Compare)
+    if (proc.includes('เทียบ') || proc.includes('เปรียบ') || proc.includes('เช็คยอด')) {
+      if (proc.includes('สูง') || proc.includes('สู้ง') || proc.includes('ซูง')) {
         const { totalHeight, top, frameHeight, bottom } = data;
-        if (isInvalid(totalHeight) || isInvalid(top) || isInvalid(frameHeight) || isInvalid(bottom)) { speak("ข้อมูลไม่ครบ"); return; }
+        if (isInvalid(totalHeight) || isInvalid(top) || isInvalid(frameHeight) || isInvalid(bottom)) { speak("ข้อมูลความสูงยังกรอกไม่ครบครับ"); return; }
         const sumParts = parseFloat(top) + parseFloat(frameHeight) + parseFloat(bottom);
         const total = parseFloat(totalHeight);
         const diff = Math.abs(total - sumParts);
-        if (total === sumParts) speak("เท่ากัน"); else if (total > sumParts) speak(`มากกว่า ${diff}`); else speak(`น้อยกว่า ${diff}`);
-      } else if (lowerCommand.includes('กว้าง') || lowerCommand.includes('กวาง')) {
+        if (total === sumParts) speak("ยอดความสูงรวมตรงกันพอดีครับ"); else if (total > sumParts) speak(`ยอดความสูงเต็ม มากกว่าส่วนประกอบอยู่ ${diff}`); else speak(`ยอดความสูงเต็ม น้อยกว่าส่วนประกอบอยู่ ${diff}`);
+      } else if (proc.includes('กว้าง') || proc.includes('กวาง') || proc.includes('ขวาง')) {
         const { totalWidth, left, frameWidth, right } = data;
-        if (isInvalid(totalWidth) || isInvalid(left) || isInvalid(frameWidth) || isInvalid(right)) { speak("ข้อมูลไม่ครบ"); return; }
+        if (isInvalid(totalWidth) || isInvalid(left) || isInvalid(frameWidth) || isInvalid(right)) { speak("ข้อมูลความกว้างยังกรอกไม่ครบครับ"); return; }
         const sumParts = parseFloat(left) + parseFloat(frameWidth) + parseFloat(right);
         const total = parseFloat(totalWidth);
         const diff = Math.abs(total - sumParts);
-        if (total === sumParts) speak("เท่ากัน"); else if (total > sumParts) speak(`มากกว่า ${diff}`); else speak(`น้อยกว่า ${diff}`);
+        if (total === sumParts) speak("ยอดความกว้างรวมตรงกันพอดีครับ"); else if (total > sumParts) speak(`ยอดความกว้างเต็ม มากกว่าส่วนประกอบอยู่ ${diff}`); else speak(`ยอดความกว้างเต็ม น้อยกว่าส่วนประกอบอยู่ ${diff}`);
       }
       return;
     }
 
-    // Command: Check
-    if (lowerCommand.includes('ตรวจสอบ') || lowerCommand.includes('เช็ค') || lowerCommand.includes('ตรวจ')) {
-      let foundField = null;
-      for (let field of VOICE_FIELDS) { if (field.matchers.some(m => lowerCommand.includes(m))) { foundField = field; break; } }
-      if (foundField) {
-        const val = data[foundField.key];
-        if (isInvalid(val)) speak("ไม่มีข้อมูล"); else speak(`${FIELD_NAMES_REVERSE[foundField.key]} คือ ${val}`);
-      }
-      return;
-    }
+    // --- 2. ประมวลผลดึงตัวเลขและทิศทาง (หัวใจหลักของ NLP) ---
+    const numMatch = proc.match(/[-+]?\d*\.?\d+/);
+    const numVal = numMatch ? parseFloat(numMatch[0]) : null;
 
-    // Command: Input Data
-    const numVal = extractNumber(lowerCommand);
-    if (numVal !== null && !isNaN(numVal)) {
-      let matchedDirKey = null; let matchIndex = -1; let bestLen = 0;
-      for (let dir of VOICE_FIELDS) {
-        for (let word of dir.matchers) {
-          const idx = lowerCommand.lastIndexOf(word);
-          if (idx !== -1) {
-            if (idx > matchIndex || (idx === matchIndex && word.length > bestLen)) {
-              matchedDirKey = dir.key; matchIndex = idx; bestLen = word.length;
-            }
-          }
+    let matchedDirKey = null;
+    let matchedDirWord = '';
+    
+    // ค้นหาทิศทางที่แมตช์ได้ "ยาวที่สุดและชัดเจนที่สุด" ก่อน
+    for (let field of VOICE_FIELDS) {
+      for (let word of field.matchers) {
+        if (proc.includes(word) && word.length > matchedDirWord.length) {
+          matchedDirKey = field.key;
+          matchedDirWord = word;
         }
       }
+    }
 
+    // ค้นหาสิ่งกีดขวางที่ถูกพูดถึง
+    let matchedObstacle = null;
+    let matchedObsWord = '';
+    for (let obs of obstacleTypes) {
+      let lObs = obs.toLowerCase();
+      if (proc.includes(lObs) && lObs.length > matchedObsWord.length) {
+        matchedObstacle = obs;
+        matchedObsWord = lObs;
+      }
+    }
+
+    // --- 3. ประมวลผล Action (สั่งงาน) ---
+    if (numVal !== null) {
+      // 🟢 กรณีที่ 1: เจอตัวเลข
       if (matchedDirKey) {
-        let prefix = lowerCommand.substring(0, matchIndex).trim();
-        prefix = prefix.replace(/(ระยะ|พื้นที่|ความ|ด้าน|ข้าง|ฝั่ง)$/i, '').trim();
-        
-        let matchedObstacle = null;
-        for (let obs of obstacleTypes) { if (prefix.includes(obs.toLowerCase())) { matchedObstacle = obs; break; } }
-
         const newProj = JSON.parse(JSON.stringify(activeProject));
+        const displayDirName = FIELD_NAMES_REVERSE[matchedDirKey];
 
         if (matchedObstacle) {
-          let sideKey = '';
-          if (['left'].includes(matchedDirKey)) sideKey = 'left';
-          else if (['right'].includes(matchedDirKey)) sideKey = 'right';
-          else if (['top'].includes(matchedDirKey)) sideKey = 'top';
-          else if (['bottom'].includes(matchedDirKey)) sideKey = 'bottom';
-
-          if (sideKey) {
+          // ถ้ามีสิ่งกีดขวาง ต้องระบุทิศด้วย (ซ้าย ขวา บน ล่าง)
+          if (['left', 'right', 'top', 'bottom'].includes(matchedDirKey)) {
             let obs = newProj.rooms[rIdx].items[iIdx].measurements.obstacles || [];
-            const exIdx = obs.findIndex(o => o.label === matchedObstacle && o.side === sideKey);
-            if (exIdx >= 0) obs[exIdx].value = numVal; else obs.push({ label: matchedObstacle, side: sideKey, value: numVal });
+            const exIdx = obs.findIndex(o => o.label === matchedObstacle && o.side === matchedDirKey);
+            if (exIdx >= 0) obs[exIdx].value = numVal; else obs.push({ label: matchedObstacle, side: matchedDirKey, value: numVal });
             newProj.rooms[rIdx].items[iIdx].measurements.obstacles = obs;
             saveProject(newProj);
-            speak(`บันทึก ${matchedObstacle} ${numVal}`); addLog(`เพิ่มอุปสรรค: ${matchedObstacle} = ${numVal}`, 'system');
+            speak(`บันทึก ${matchedObstacle} ${displayDirName} ${numVal}`);
+            addLog(`บันทึกสิ่งกีดขวาง: ${matchedObstacle} ${displayDirName} = ${numVal}`, 'system');
           } else {
-            newProj.rooms[rIdx].items[iIdx].measurements[matchedDirKey] = numVal;
-            saveProject(newProj); speak(`บันทึก ${FIELD_NAMES_REVERSE[matchedDirKey]} ${numVal}`);
+            speak(`กรุณาระบุว่า ${matchedObstacle} อยู่ด้านซ้าย ขวา บน หรือ ล่าง ครับ`);
+            addLog(`⚠️ ทิศทาง '${displayDirName}' ไม่รองรับสิ่งกีดขวาง`, 'system');
           }
         } else {
+          // ขนาดปกติ
           newProj.rooms[rIdx].items[iIdx].measurements[matchedDirKey] = numVal;
           saveProject(newProj);
-          speak(`บันทึก ${FIELD_NAMES_REVERSE[matchedDirKey]} ${numVal}`); addLog(`บันทึก: ${FIELD_NAMES_REVERSE[matchedDirKey]} = ${numVal}`, 'system');
+          speak(`บันทึก ${displayDirName} ${numVal}`);
+          addLog(`บันทึก: ${displayDirName} = ${numVal}`, 'system');
         }
-        return; 
+      } else {
+        // 🔴 ได้ยินตัวเลข แต่ไม่รู้ว่าให้ใส่ช่องไหน
+        speak(`ได้ยินเลข ${numVal} แต่ไม่ทราบว่าให้ใส่ช่องไหนครับ`);
+        addLog(`⚠️ ฟังทิศทางไม่ออกสำหรับเลข ${numVal}`, 'system');
+      }
+    } else {
+      // 🟢 กรณีที่ 2: ไม่เจอตัวเลข แต่เจอคีย์เวิร์ด
+      if (matchedDirKey || matchedObstacle) {
+         speak(`ให้ใส่ค่า ${matchedDirWord || matchedObsWord} เท่าไหร่ครับ`);
+         addLog(`⚠️ ขาดตัวเลขสำหรับ ${matchedDirWord || matchedObsWord}`, 'system');
+      } else {
+        // ไม่เจอทั้งคู่ (พูดคุยทั่วไป)
+        // ไม่ต้องทำอะไรเพื่อป้องกันเสียงรบกวนเวลาคุยกันเอง
       }
     }
-    addLog(`[ข้ามเสียง]: "${cleanCommand}"`, "system");
   };
 
   useEffect(() => { latestVoiceHandlerRef.current = handleVoiceCommand; });
 
+  // --- Voice Recognition Engine (แก้ปัญหาไมค์หลุด/หูหนวก) ---
   useEffect(() => {
-    loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js').catch(err => console.error(err));
+    if (!isListening) return;
 
+    let recognition = null;
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = false;
-      recognitionRef.current.lang = 'th-TH';
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'th-TH';
 
-      recognitionRef.current.onresult = (event) => {
-        if (isSpeakingRef.current) return;
+      recognition.onresult = (event) => {
+        if (isSpeakingRef.current) return; // ไม่ฟังตอนระบบกำลังพูดตอบ
         const transcript = event.results[event.resultIndex][0].transcript.trim();
         if (latestVoiceHandlerRef.current) latestVoiceHandlerRef.current(transcript);
       };
 
-      recognitionRef.current.onerror = (event) => {
+      recognition.onerror = (event) => {
         if (event.error === 'no-speech') return;
-        if (event.error === 'network') { setErrorMessage("เน็ตขัดข้อง ลองเปิดไมค์ใหม่"); setIsListening(false); return; }
-        if (event.error === 'not-allowed') { setIsListening(false); setErrorMessage("อนุญาตให้ใช้ไมโครโฟนด้วยครับ"); }
+        if (event.error === 'network') { 
+          setErrorMessage("เน็ตขัดข้อง ไมค์หลุด กรุณาลองกดปุ่มเปิดไมค์ใหม่อีกครั้ง"); 
+          setIsListening(false); 
+          return; 
+        }
+        if (event.error === 'not-allowed') { 
+          setIsListening(false); 
+          setErrorMessage("เบราว์เซอร์ไม่อนุญาตให้ใช้ไมค์ กรุณากดรูปกุญแจบน URL แล้วกด Allow (อนุญาต)"); 
+        }
       };
 
-      recognitionRef.current.onend = () => { if (isListening && recognitionRef.current) { try { recognitionRef.current.start(); } catch (e) {} } };
+      recognition.onend = () => {
+        // หากผู้ใช้ยังไม่ได้สั่งปิดไมค์ ให้พยายาม Restart ไมค์เรื่อยๆ
+        if (isListening) {
+          try { recognition.start(); } catch (e) {}
+        }
+      };
+
+      try {
+        recognition.start();
+      } catch (e) {
+        console.error("Start voice error: ", e);
+      }
+      
+      recognitionRef.current = recognition;
+    } else {
+      setErrorMessage("เบราว์เซอร์ไม่รองรับคำสั่งเสียง แนะนำให้ใช้ Google Chrome ครับ");
+      setIsListening(false);
     }
-    return () => { if (recognitionRef.current) recognitionRef.current.stop(); };
-  }, [isListening]);
+
+    return () => {
+      if (recognition) {
+        recognition.onend = null; // ป้องกันการติด Loop รีสตาร์ทตัวเองตอนจะปิดแอป
+        recognition.stop();
+      }
+    };
+  }, [isListening]); 
 
   const toggleMic = () => {
-    if ('speechSynthesis' in window) window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    
     if (isListening) {
-      recognitionRef.current.stop(); setIsListening(false); setIsDictatingRemark(false); isSpeakingRef.current = false;
-      addLog("ปิดไมโครโฟน", "system"); speak("ปิดระบบรับคำสั่ง");
+      setIsListening(false); 
+      setIsDictatingRemark(false); 
+      isSpeakingRef.current = false;
+      addLog("ปิดไมโครโฟน", "system"); 
+      speak("ปิดระบบรับคำสั่ง");
     } else {
-      try {
-        isSpeakingRef.current = false; recognitionRef.current.start(); setIsListening(true);
-        addLog("เปิดไมโครโฟน พร้อมรับคำสั่ง...", "system"); speak("พร้อมรับคำสั่ง");
-      } catch (e) { console.error(e); }
+      setIsListening(true);
+      isSpeakingRef.current = false;
+      addLog("เปิดไมโครโฟน พร้อมรับคำสั่ง...", "system"); 
+      speak("พร้อมรับคำสั่ง");
     }
   };
 
@@ -504,8 +579,8 @@ export default function App() {
   const editItem = (e, projectId, roomId, itemId) => {
     e.stopPropagation();
     const proj = projects.find(p => p.id === projectId);
-    const r = proj?.rooms.find(r => r.id === roomId);
-    const i = r?.items.find(i => i.id === itemId);
+    const r = (proj?.rooms || []).find(r => r.id === roomId);
+    const i = (r?.items || []).find(i => i.id === itemId);
     if(!i) return;
     handlePrompt("แก้ไขชื่อบาน:", i.name, (newName) => {
       const newProj = JSON.parse(JSON.stringify(proj));
@@ -592,14 +667,15 @@ export default function App() {
   const getFlexValue = (val, defaultFlex) => { const num = parseFloat(val); return !isNaN(num) && num >= 0 ? Math.max(num, 0.001) : defaultFlex; };
   const getObstaclesBySide = (obsList, side) => (obsList || []).filter(o => o.side === side);
 
+  // --- Computed Variables ---
   let displayProjects = projects;
-  if (authUser?.role !== 'admin') displayProjects = projects.filter(p => p.createdBy === authUser.id);
-  if (searchTerm) displayProjects = displayProjects.filter(p => p.customerName.toLowerCase().includes(searchTerm.toLowerCase()));
-  if (authUser?.role === 'admin' && staffFilter) displayProjects = displayProjects.filter(p => p.createdBy === staffFilter);
+  if (authUser && authUser.role !== 'admin') displayProjects = projects.filter(p => p.createdBy === authUser.id);
+  if (searchTerm) displayProjects = displayProjects.filter(p => p.customerName && p.customerName.toLowerCase().includes(searchTerm.toLowerCase()));
+  if (authUser && authUser.role === 'admin' && staffFilter) displayProjects = displayProjects.filter(p => p.createdBy === staffFilter);
 
   const activeProject = projects.find(p => p.id === activeProjectId);
-  const activeRoom = activeProject?.rooms.find(r => r.id === activeRoomId);
-  const activeItem = activeRoom?.items.find(i => i.id === activeItemId);
+  const activeRoom = (activeProject?.rooms || []).find(r => r.id === activeRoomId);
+  const activeItem = (activeRoom?.items || []).find(i => i.id === activeItemId);
 
   const allItemsFlat = projects.flatMap(p => 
     (p.rooms || []).flatMap(r => 
@@ -830,7 +906,7 @@ export default function App() {
                      <input type="text" placeholder="หมายเหตุสำหรับห้องนี้..." className="w-full text-xs p-2 mb-3 border border-slate-200 rounded bg-yellow-50 focus:outline-none focus:border-yellow-400" value={activeRoom.roomRemark || ''} onChange={(e) => updateRoomRemark(activeRoom.id, e.target.value)} />
                      <div ref={roomLayoutRef} className="flex-1 w-full aspect-square bg-slate-100 border-2 border-slate-200 rounded-lg relative overflow-hidden cursor-crosshair touch-none" onClick={handleRoomClickEmpty}>
                         <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'linear-gradient(#ccc 1px, transparent 1px), linear-gradient(90deg, #ccc 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
-                        {activeRoom.items.map(item => (
+                        {(activeRoom.items || []).map(item => (
                           <div key={item.id} onPointerDown={(e) => handleRoomPointerDown(e, item.id)} onClick={(e) => { e.stopPropagation(); setActiveItemId(item.id); }} className={`absolute w-8 h-8 -ml-4 -mt-4 flex flex-col items-center justify-center cursor-grab active:cursor-grabbing transition-transform ${draggingItem === item.id ? 'scale-125 z-20' : 'hover:scale-110 z-10'}`} style={{ left: `${item.x || 50}%`, top: `${item.y || 50}%` }}>
                              <div className={`w-4 h-4 rounded-full shadow-md border-2 ${activeItemId === item.id ? 'bg-indigo-500 border-white animate-pulse' : 'bg-white border-slate-400'}`}></div>
                              <span className="mt-1 bg-white/90 text-[9px] font-bold px-1 rounded shadow-sm whitespace-nowrap pointer-events-none">{item.name}</span>
