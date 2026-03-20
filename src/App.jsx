@@ -87,6 +87,7 @@ export default function App() {
   const latestVoiceHandlerRef = useRef();
   const isSpeakingRef = useRef(false); 
   const speakingTimeoutRef = useRef(null);
+  const pendingConfirmRef = useRef(null); // เก็บสถานะรอการยืนยันคำสั่งทับซ้อน
 
   // --- Login Form State ---
   const [loginUser, setLoginUser] = useState('');
@@ -202,7 +203,7 @@ export default function App() {
 
   const addLog = (text, type = 'user') => setLogs(prev => [...prev.slice(-4), { text, type, time: new Date().toLocaleTimeString() }]);
 
-  // 🗣️ ระบบตอบกลับเสียง (ลดเวลาหน่วง ไม่ให้ไมค์ดับนาน)
+  // 🗣️ ระบบตอบกลับเสียง
   const speak = (text) => {
     setSpeechFeedback(text);
     if ('speechSynthesis' in window) {
@@ -334,22 +335,40 @@ export default function App() {
     const data = activeProject.rooms[rIdx].items[iIdx].measurements;
     const isInvalid = (val) => val === null || val === undefined || val === '';
 
-    // ตรวจสอบความถูกต้อง (Compare)
+    // --- ตรวจสอบเช็คข้อมูลทั้งหมด (Check All) ---
+    if (proc.match(/^(เช็คทั้งหมด|ตรวจสอบทั้งหมด|ตรวจทั้งหมด)$/)) {
+      let missing = [];
+      for (let field of VOICE_FIELDS) {
+        if (isInvalid(data[field.key])) {
+          missing.push(FIELD_NAMES_REVERSE[field.key]);
+        }
+      }
+      if (missing.length === 0) {
+        speak("ครบถ้วน");
+        addLog("ตรวจสอบ: ครบถ้วน", "system");
+      } else {
+        speak(`ขาด ${missing.join(' และ ')}`);
+        addLog(`ตรวจสอบ: ขาด ${missing.join(', ')}`, "system");
+      }
+      return;
+    }
+
+    // --- ตรวจสอบความถูกต้องเปรียบเทียบ (Compare) ---
     if (proc.includes('เทียบ') || proc.includes('เปรียบ') || proc.includes('เช็คยอด')) {
       if (proc.includes('สูง') || proc.includes('สู้ง') || proc.includes('ซูง')) {
         const { totalHeight, top, frameHeight, bottom } = data;
-        if (isInvalid(totalHeight) || isInvalid(top) || isInvalid(frameHeight) || isInvalid(bottom)) { speak("ข้อมูลความสูงยังกรอกไม่ครบครับ"); return; }
+        if (isInvalid(totalHeight) || isInvalid(top) || isInvalid(frameHeight) || isInvalid(bottom)) { speak("ข้อมูลส่วนประกอบความสูงยังกรอกไม่ครบครับ"); return; }
         const sumParts = parseFloat(top) + parseFloat(frameHeight) + parseFloat(bottom);
         const total = parseFloat(totalHeight);
         const diff = Math.abs(total - sumParts);
-        if (total === sumParts) speak("ยอดความสูงรวมตรงกันพอดีครับ"); else if (total > sumParts) speak(`ยอดความสูงเต็ม มากกว่าส่วนประกอบอยู่ ${diff}`); else speak(`ยอดความสูงเต็ม น้อยกว่าส่วนประกอบอยู่ ${diff}`);
+        if (total === sumParts) speak("ยอดความสูงรวมตรงกันพอดีครับ"); else if (total > sumParts) speak(`ความสูงเต็ม มากกว่าส่วนประกอบอยู่ ${diff}`); else speak(`ความสูงเต็ม น้อยกว่าส่วนประกอบอยู่ ${diff}`);
       } else if (proc.includes('กว้าง') || proc.includes('กวาง') || proc.includes('ขวาง')) {
         const { totalWidth, left, frameWidth, right } = data;
-        if (isInvalid(totalWidth) || isInvalid(left) || isInvalid(frameWidth) || isInvalid(right)) { speak("ข้อมูลความกว้างยังกรอกไม่ครบครับ"); return; }
+        if (isInvalid(totalWidth) || isInvalid(left) || isInvalid(frameWidth) || isInvalid(right)) { speak("ข้อมูลส่วนประกอบความกว้างยังกรอกไม่ครบครับ"); return; }
         const sumParts = parseFloat(left) + parseFloat(frameWidth) + parseFloat(right);
         const total = parseFloat(totalWidth);
         const diff = Math.abs(total - sumParts);
-        if (total === sumParts) speak("ยอดความกว้างรวมตรงกันพอดีครับ"); else if (total > sumParts) speak(`ยอดความกว้างเต็ม มากกว่าส่วนประกอบอยู่ ${diff}`); else speak(`ยอดความกว้างเต็ม น้อยกว่าส่วนประกอบอยู่ ${diff}`);
+        if (total === sumParts) speak("ยอดความกว้างรวมตรงกันพอดีครับ"); else if (total > sumParts) speak(`ความกว้างเต็ม มากกว่าส่วนประกอบอยู่ ${diff}`); else speak(`ความกว้างเต็ม น้อยกว่าส่วนประกอบอยู่ ${diff}`);
       }
       return;
     }
@@ -382,15 +401,55 @@ export default function App() {
       }
     }
 
-    // --- 3. ประมวลผล Action (สั่งงาน) ---
+    // --- 3. ประมวลผล Action (สั่งงานและแก้ปัญหาการชนกันของข้อมูล) ---
     if (numVal !== null) {
-      // 🟢 กรณีที่ 1: เจอตัวเลข
+
+      let isConfirming = false;
+      // ตรวจสอบว่ากำลังรอการยืนยันข้อมูลซ้อนทับอยู่หรือไม่
+      if (pendingConfirmRef.current) {
+        const { dirKey, obstacle } = pendingConfirmRef.current;
+        
+        // ถ้าผู้ใช้พูดตัวเลขเฉยๆ หรือพูดทิศทางเดิมซ้ำ ถือว่าเป็นการยืนยัน
+        if (!matchedDirKey || matchedDirKey === dirKey) {
+          matchedDirKey = dirKey;
+          matchedObstacle = obstacle;
+          isConfirming = true; // ยกเว้นการเช็คข้อมูลซ้ำซ้อนในรอบนี้
+          pendingConfirmRef.current = null;
+        } else if (proc.match(/^(ยกเลิก|ไม่เปลี่ยน|ไม่แก้)/)) {
+          speak("ยกเลิกการเปลี่ยนค่าครับ");
+          pendingConfirmRef.current = null;
+          return;
+        } else {
+          // ถ้าผู้ใช้พูดทิศทางใหม่ไปเลย ให้ล้างสถานะยืนยันและไปทำงานคำสั่งใหม่ทันที
+          pendingConfirmRef.current = null;
+        }
+      }
+
       if (matchedDirKey) {
         const newProj = JSON.parse(JSON.stringify(activeProject));
         const displayDirName = FIELD_NAMES_REVERSE[matchedDirKey];
-
+        
+        // --- ดึงข้อมูลเดิมที่มีอยู่มาเช็ค ---
+        let existingVal = null;
         if (matchedObstacle) {
-          // ถ้ามีสิ่งกีดขวาง ต้องระบุทิศด้วย (ซ้าย ขวา บน ล่าง)
+          let obs = newProj.rooms[rIdx].items[iIdx].measurements.obstacles || [];
+          const exObs = obs.find(o => o.label === matchedObstacle && o.side === matchedDirKey);
+          if (exObs) existingVal = exObs.value;
+        } else {
+          existingVal = newProj.rooms[rIdx].items[iIdx].measurements[matchedDirKey];
+        }
+
+        // --- ระบบป้องกันการกรอกทับ (Collision Detection) ---
+        // ถ้ามีข้อมูลอยู่แล้ว, ไม่ได้กำลังยืนยัน, และ "ตัวเลขใหม่ไม่ตรงกับตัวเลขเดิม"
+        if (!isConfirming && !isInvalid(existingVal) && parseFloat(existingVal) !== numVal) {
+          pendingConfirmRef.current = { dirKey: matchedDirKey, obstacle: matchedObstacle };
+          speak(`มีขนาด${matchedObstacle ? matchedObstacle + ' ' : ''}${displayDirName}อยู่แล้ว ต้องการใช้ค่าไหนครับ`);
+          addLog(`⚠️ แจ้งเตือนข้อมูลซ้ำ: ${displayDirName}`, 'system');
+          return; // หยุดทำงานและรอผู้ใช้พูดยืนยันในคำสั่งถัดไป
+        }
+
+        // --- บันทึกข้อมูลลงในระบบ ---
+        if (matchedObstacle) {
           if (['left', 'right', 'top', 'bottom'].includes(matchedDirKey)) {
             let obs = newProj.rooms[rIdx].items[iIdx].measurements.obstacles || [];
             const exIdx = obs.findIndex(o => o.label === matchedObstacle && o.side === matchedDirKey);
@@ -404,7 +463,6 @@ export default function App() {
             addLog(`⚠️ ทิศทาง '${displayDirName}' ไม่รองรับสิ่งกีดขวาง`, 'system');
           }
         } else {
-          // ขนาดปกติ
           newProj.rooms[rIdx].items[iIdx].measurements[matchedDirKey] = numVal;
           saveProject(newProj);
           speak(`บันทึก ${displayDirName} ${numVal}`);
@@ -421,15 +479,14 @@ export default function App() {
          speak(`ให้ใส่ค่า ${matchedDirWord || matchedObsWord} เท่าไหร่ครับ`);
          addLog(`⚠️ ขาดตัวเลขสำหรับ ${matchedDirWord || matchedObsWord}`, 'system');
       } else {
-        // ไม่เจอทั้งคู่ (พูดคุยทั่วไป)
-        // ไม่ต้องทำอะไรเพื่อป้องกันเสียงรบกวนเวลาคุยกันเอง
+        // ไม่เจอทั้งคู่ (พูดคุยทั่วไป ปล่อยผ่านไปเงียบๆ)
       }
     }
   };
 
   useEffect(() => { latestVoiceHandlerRef.current = handleVoiceCommand; });
 
-  // --- Voice Recognition Engine (แก้ปัญหาไมค์หลุด/หูหนวก) ---
+  // --- Voice Recognition Engine ---
   useEffect(() => {
     if (!isListening) return;
 
@@ -461,7 +518,6 @@ export default function App() {
       };
 
       recognition.onend = () => {
-        // หากผู้ใช้ยังไม่ได้สั่งปิดไมค์ ให้พยายาม Restart ไมค์เรื่อยๆ
         if (isListening) {
           try { recognition.start(); } catch (e) {}
         }
@@ -481,7 +537,7 @@ export default function App() {
 
     return () => {
       if (recognition) {
-        recognition.onend = null; // ป้องกันการติด Loop รีสตาร์ทตัวเองตอนจะปิดแอป
+        recognition.onend = null; 
         recognition.stop();
       }
     };
@@ -494,6 +550,7 @@ export default function App() {
       setIsListening(false); 
       setIsDictatingRemark(false); 
       isSpeakingRef.current = false;
+      pendingConfirmRef.current = null; // รีเซ็ตการยืนยันเมื่อปิดไมค์
       addLog("ปิดไมโครโฟน", "system"); 
       speak("ปิดระบบรับคำสั่ง");
     } else {
@@ -920,7 +977,7 @@ export default function App() {
                       <div className={`w-2.5 h-2.5 rounded-full ${isListening ? 'bg-red-500 animate-pulse' : 'bg-slate-300'}`}></div>
                       <span className="font-semibold text-sm">การสั่งงานด้วยเสียง</span>
                     </div>
-                    <div className="text-xs text-slate-500 mb-2">เช่น: "เริ่ม บาน1", "ซ้าย 50", "บน 0", "ปลั๊ก ขวา 15", "หมายเหตุ..."</div>
+                    <div className="text-xs text-slate-500 mb-2">เช่น: "เริ่ม บาน1", "ซ้าย 50", "บน 0", "เช็คทั้งหมด", "หมายเหตุ..."</div>
                     <div className="bg-slate-50 h-16 sm:h-20 overflow-y-auto p-2 rounded border border-slate-100 text-xs font-mono flex flex-col justify-end">
                       {logs.map((log, idx) => (<div key={idx} className={`mb-0.5 ${log.type === 'system' ? 'text-indigo-600' : 'text-slate-600'}`}><span className="opacity-50 text-[10px]">[{log.time}]</span> {log.text}</div>))}
                       {logs.length === 0 && <span className="text-slate-400">ประวัติคำสั่ง...</span>}
@@ -1154,7 +1211,7 @@ export default function App() {
                   } else {
                       setErrorMessage("กรุณากรอกข้อมูลให้ครบถ้วน");
                   }
-              }} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">บันทึก</button>
+              }} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">บันึก</button>
             </div>
           </div>
         </div>
