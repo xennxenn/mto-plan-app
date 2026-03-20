@@ -117,6 +117,14 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // --- Load PDF Library ---
+  useEffect(() => {
+    if (!window.html2pdf) {
+      loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js')
+        .catch(err => console.error("Error loading PDF library:", err));
+    }
+  }, []);
+
   // --- Fetch Data ---
   useEffect(() => {
     if (!dbUser) return;
