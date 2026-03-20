@@ -685,7 +685,7 @@ export default function App() {
     pdfPages.push(currentProjectItems.slice(i, i + 6));
   }
 
-  // --- การเซฟและแชร์เป็น PDF (เวอร์ชันใหม่) ---
+  // --- การเซฟ PDF (เวอร์ชันบังคับดาวน์โหลดลงเครื่อง) ---
   const generatePDF = () => {
     if (!window.html2pdf) { 
       setErrorMessage("ระบบ PDF กำลังโหลด กรุณารอสักครู่แล้วลองกดใหม่อีกครั้งครับ"); 
@@ -697,7 +697,8 @@ export default function App() {
     }
 
     setIsExporting(true);
-    const filename = `MTO_Plan_${activeProject.customerName || 'Export'}.pdf`;
+    // เปลี่ยนชื่อไฟล์เป็น MTO Plan คุณ [ชื่อลูกค้า]
+    const filename = `MTO Plan คุณ ${activeProject.customerName || 'ลูกค้า'}.pdf`;
 
     const opt = { 
       margin: 0, 
@@ -707,43 +708,20 @@ export default function App() {
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } 
     };
 
-    // ใช้ html2pdf แบบรองรับการทำ Blob เพื่อนำไปแชร์ต่อ
-    window.html2pdf().set(opt).from(pdfContainerRef.current).output('blob').then((blob) => {
-       const file = new File([blob], filename, { type: 'application/pdf' });
-       
-       // ตรวจสอบระบบแชร์ของเครื่อง (มักจะมีบนมือถือ/แท็บเล็ต)
-       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          navigator.share({
-            files: [file],
-            title: filename,
-            text: 'ส่งเอกสาร MTO Plan'
-          }).then(() => {
-             setIsExporting(false);
-          }).catch(err => {
-            // หากผู้ใช้กดยกเลิกแชร์ หรือเกิดข้อผิดพลาด ให้ใช้วิธีดาวน์โหลดลงเครื่องแทน
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-            URL.revokeObjectURL(url);
-            setIsExporting(false);
-          });
-       } else {
-          // สำหรับ PC / Browser ที่ไม่มีเมนูแชร์ ให้ดาวน์โหลดลงเครื่องทันที
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          a.click();
-          URL.revokeObjectURL(url);
-          setIsExporting(false);
-       }
-    }).catch(err => {
-       console.error("PDF Generate Error:", err);
-       setErrorMessage("เกิดข้อผิดพลาดในการสร้างไฟล์ PDF");
-       setIsExporting(false);
-    });
+    try {
+      // ใช้คำสั่ง .save() โดยตรง เพื่อบังคับระบบให้ "ดาวน์โหลดไฟล์ลงเครื่องทันที"
+      window.html2pdf().set(opt).from(pdfContainerRef.current).save().then(() => {
+         setIsExporting(false);
+      }).catch(err => {
+         console.error("PDF Generate Error:", err);
+         setErrorMessage("เกิดข้อผิดพลาดในการสร้างไฟล์ PDF");
+         setIsExporting(false);
+      });
+    } catch (e) {
+      console.error("PDF Fatal Error:", e);
+      setErrorMessage("เกิดข้อผิดพลาดขั้นร้ายแรงในระบบ PDF");
+      setIsExporting(false);
+    }
   };
 
   const getFlexValue = (val, defaultFlex) => { const num = parseFloat(val); return !isNaN(num) && num >= 0 ? Math.max(num, 0.001) : defaultFlex; };
@@ -1050,15 +1028,15 @@ export default function App() {
           </main>
 
           {/* --- Export PDF Hidden Template --- */}
-          <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', width: 0, height: 0, overflow: 'hidden' }}>
-            <div ref={pdfContainerRef} style={{ background: 'white', width: '210mm' }} className="text-black font-sans">
+          <div style={{ position: 'absolute', left: '-99999px', top: 0 }}>
+            <div ref={pdfContainerRef} style={{ background: 'white', width: '210mm', minHeight: '297mm' }} className="text-black font-sans">
               {pdfPages.length === 0 ? (
                 <div className="p-10 text-center">ไม่มีข้อมูลสำหรับ Export</div>
               ) : (
                 pdfPages.map((pageItems, pageIdx) => (
                   <div key={pageIdx} className="page" style={{ width: '210mm', height: '297mm', padding: '10mm', boxSizing: 'border-box', pageBreakAfter: 'always' }}>
                     <div className="text-center font-bold text-xl mb-4 border-b pb-2 flex justify-between items-end">
-                      <span>รายงานขนาด (MTO Plan)</span> <span className="text-xs font-normal">หน้า {pageIdx + 1} / {pdfPages.length}</span>
+                      <span>MTO Plan: คุณ {activeProject?.customerName}</span> <span className="text-xs font-normal">หน้า {pageIdx + 1} / {pdfPages.length}</span>
                     </div>
                     
                     <div className="grid grid-cols-2 grid-rows-3 gap-4 h-[255mm]">
@@ -1072,9 +1050,10 @@ export default function App() {
 
                         return (
                         <div key={idx} className="border border-gray-400 rounded p-2 flex flex-col items-center justify-start relative text-xs">
-                          <div className="w-full bg-slate-100 p-1 mb-1 text-center rounded border border-slate-200 flex flex-col">
-                            <span className="font-bold">{item.customerName} : {item.roomName} : {item.name}</span>
-                            {item.roomRemark && <span className="text-[7px] text-slate-500 italic mt-0.5 text-left bg-white px-1 border border-slate-100">* {item.roomRemark}</span>}
+                          <div className="w-full bg-slate-100 p-1.5 mb-1 text-center rounded border border-slate-200 flex flex-col gap-0.5">
+                            <span className="text-[8px] text-slate-500 font-medium">ลูกค้า: {item.customerName} | ห้อง: {item.roomName}</span>
+                            <span className="font-bold text-[11px] text-indigo-700">{item.name}</span>
+                            {item.roomRemark && <span className="text-[7px] text-red-500 italic mt-0.5 text-left bg-white px-1 border border-slate-100">* หมายเหตุห้อง: {item.roomRemark}</span>}
                           </div>
                           
                           <div className="relative w-[95%] h-[65%] mt-1">
