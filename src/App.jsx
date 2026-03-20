@@ -69,6 +69,7 @@ export default function App() {
   const [speechFeedback, setSpeechFeedback] = useState("");
   const [saveStatus, setSaveStatus] = useState('saved'); 
   const [errorMessage, setErrorMessage] = useState('');
+  const [isExporting, setIsExporting] = useState(false); // สถานะขณะ Export PDF
   
   // --- Modals ---
   const [promptConfig, setPromptConfig] = useState({ isOpen: false, title: '', defaultValue: '', onSubmit: null, type: 'text' });
@@ -656,17 +657,6 @@ export default function App() {
     addItemAtPosition(activeRoomId, x, y);
   };
 
-  // --- PDF ---
-  const generatePDF = () => {
-    if (!window.html2pdf) { setErrorMessage("กำลังโหลด PDF กรุณารอสักครู่"); return; }
-    pdfContainerRef.current.style.display = 'block';
-    const opt = { margin: 10, filename: 'MTO_Plan_Export.pdf', image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } };
-    window.html2pdf().set(opt).from(pdfContainerRef.current).save().then(() => { pdfContainerRef.current.style.display = 'none'; });
-  };
-
-  const getFlexValue = (val, defaultFlex) => { const num = parseFloat(val); return !isNaN(num) && num >= 0 ? Math.max(num, 0.001) : defaultFlex; };
-  const getObstaclesBySide = (obsList, side) => (obsList || []).filter(o => o.side === side);
-
   // --- Computed Variables ---
   let displayProjects = projects;
   if (authUser && authUser.role !== 'admin') displayProjects = projects.filter(p => p.createdBy === authUser.id);
@@ -677,15 +667,79 @@ export default function App() {
   const activeRoom = (activeProject?.rooms || []).find(r => r.id === activeRoomId);
   const activeItem = (activeRoom?.items || []).find(i => i.id === activeItemId);
 
-  const allItemsFlat = projects.flatMap(p => 
-    (p.rooms || []).flatMap(r => 
-      (r.items || []).map(i => ({ ...i, roomName: r.name, customerName: p.customerName, roomRemark: r.roomRemark }))
-    )
-  );
+  // 📝 ดึงข้อมูล "เฉพาะของลูกค้าคนปัจจุบัน" มาทำ PDF
+  const currentProjectItems = activeProject ? (activeProject.rooms || []).flatMap(r => 
+    (r.items || []).map(i => ({ ...i, roomName: r.name, customerName: activeProject.customerName, roomRemark: r.roomRemark }))
+  ) : [];
+  
   const pdfPages = [];
-  for (let i = 0; i < allItemsFlat.length; i += 6) {
-    pdfPages.push(allItemsFlat.slice(i, i + 6));
+  for (let i = 0; i < currentProjectItems.length; i += 6) {
+    pdfPages.push(currentProjectItems.slice(i, i + 6));
   }
+
+  // --- การเซฟและแชร์เป็น PDF (เวอร์ชันใหม่) ---
+  const generatePDF = () => {
+    if (!window.html2pdf) { 
+      setErrorMessage("ระบบ PDF กำลังโหลด กรุณารอสักครู่แล้วลองกดใหม่อีกครั้งครับ"); 
+      return; 
+    }
+    if (!activeProject || pdfPages.length === 0) {
+      setErrorMessage("ยังไม่มีข้อมูลบานหน้าต่างสำหรับสร้าง PDF ของลูกค้ารายนี้ครับ");
+      return;
+    }
+
+    setIsExporting(true);
+    const filename = `MTO_Plan_${activeProject.customerName || 'Export'}.pdf`;
+
+    const opt = { 
+      margin: 0, 
+      filename: filename, 
+      image: { type: 'jpeg', quality: 0.98 }, 
+      html2canvas: { scale: 2, useCORS: true, logging: false }, 
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } 
+    };
+
+    // ใช้ html2pdf แบบรองรับการทำ Blob เพื่อนำไปแชร์ต่อ
+    window.html2pdf().set(opt).from(pdfContainerRef.current).output('blob').then((blob) => {
+       const file = new File([blob], filename, { type: 'application/pdf' });
+       
+       // ตรวจสอบระบบแชร์ของเครื่อง (มักจะมีบนมือถือ/แท็บเล็ต)
+       if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          navigator.share({
+            files: [file],
+            title: filename,
+            text: 'ส่งเอกสาร MTO Plan'
+          }).then(() => {
+             setIsExporting(false);
+          }).catch(err => {
+            // หากผู้ใช้กดยกเลิกแชร์ หรือเกิดข้อผิดพลาด ให้ใช้วิธีดาวน์โหลดลงเครื่องแทน
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+            setIsExporting(false);
+          });
+       } else {
+          // สำหรับ PC / Browser ที่ไม่มีเมนูแชร์ ให้ดาวน์โหลดลงเครื่องทันที
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          a.click();
+          URL.revokeObjectURL(url);
+          setIsExporting(false);
+       }
+    }).catch(err => {
+       console.error("PDF Generate Error:", err);
+       setErrorMessage("เกิดข้อผิดพลาดในการสร้างไฟล์ PDF");
+       setIsExporting(false);
+    });
+  };
+
+  const getFlexValue = (val, defaultFlex) => { const num = parseFloat(val); return !isNaN(num) && num >= 0 ? Math.max(num, 0.001) : defaultFlex; };
+  const getObstaclesBySide = (obsList, side) => (obsList || []).filter(o => o.side === side);
 
   const flexL = activeItem ? getFlexValue(activeItem.measurements.left, 1) : 1;
   const flexFW = activeItem ? getFlexValue(activeItem.measurements.frameWidth, 3) : 3;
@@ -825,9 +879,12 @@ export default function App() {
               <button onClick={toggleMic} className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium transition-colors ${isListening ? 'bg-red-500 hover:bg-red-600 shadow-md animate-pulse' : 'bg-white text-indigo-600 hover:bg-indigo-50'}`}>
                 {isListening ? <MicOff size={16} /> : <Mic size={16} />} <span className="hidden sm:inline">{isListening ? 'ปิดไมค์' : 'เปิดไมค์'}</span>
               </button>
-              <button onClick={generatePDF} className="flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 bg-emerald-500 hover:bg-emerald-600 rounded-full text-white text-xs sm:text-sm font-medium transition-colors">
-                <FileDown size={16} /> <span className="hidden sm:inline">Export PDF</span>
+              
+              {/* ปุ่มกด Export และ Share PDF */}
+              <button onClick={generatePDF} disabled={isExporting} className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 ${isExporting ? 'bg-slate-400' : 'bg-emerald-500 hover:bg-emerald-600'} rounded-full text-white text-xs sm:text-sm font-medium transition-colors`}>
+                <FileDown size={16} /> <span className="hidden sm:inline">{isExporting ? 'กำลังประมวลผล...' : 'Export PDF'}</span>
               </button>
+
             </div>
           </header>
 
@@ -985,83 +1042,85 @@ export default function App() {
           </main>
 
           {/* --- Export PDF Hidden Template --- */}
-          <div ref={pdfContainerRef} style={{ display: 'none', background: 'white', width: '210mm' }} className="text-black font-sans">
-            {pdfPages.length === 0 ? (
-              <div className="p-10 text-center">ไม่มีข้อมูลสำหรับ Export</div>
-            ) : (
-              pdfPages.map((pageItems, pageIdx) => (
-                <div key={pageIdx} className="page" style={{ width: '210mm', height: '297mm', padding: '10mm', boxSizing: 'border-box', pageBreakAfter: 'always' }}>
-                  <div className="text-center font-bold text-xl mb-4 border-b pb-2 flex justify-between items-end">
-                    <span>รายงานขนาด (MTO Plan)</span> <span className="text-xs font-normal">หน้า {pageIdx + 1} / {pdfPages.length}</span>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 grid-rows-3 gap-4 h-[255mm]">
-                    {pageItems.map((item, idx) => {
-                      const pFlexL = getFlexValue(item.measurements.left, 1);
-                      const pFlexFW = getFlexValue(item.measurements.frameWidth, 3);
-                      const pFlexR = getFlexValue(item.measurements.right, 1);
-                      const pFlexT = getFlexValue(item.measurements.top, 1);
-                      const pFlexFH = getFlexValue(item.measurements.frameHeight, 3);
-                      const pFlexB = getFlexValue(item.measurements.bottom, 1);
+          <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', width: 0, height: 0, overflow: 'hidden' }}>
+            <div ref={pdfContainerRef} style={{ background: 'white', width: '210mm' }} className="text-black font-sans">
+              {pdfPages.length === 0 ? (
+                <div className="p-10 text-center">ไม่มีข้อมูลสำหรับ Export</div>
+              ) : (
+                pdfPages.map((pageItems, pageIdx) => (
+                  <div key={pageIdx} className="page" style={{ width: '210mm', height: '297mm', padding: '10mm', boxSizing: 'border-box', pageBreakAfter: 'always' }}>
+                    <div className="text-center font-bold text-xl mb-4 border-b pb-2 flex justify-between items-end">
+                      <span>รายงานขนาด (MTO Plan)</span> <span className="text-xs font-normal">หน้า {pageIdx + 1} / {pdfPages.length}</span>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 grid-rows-3 gap-4 h-[255mm]">
+                      {pageItems.map((item, idx) => {
+                        const pFlexL = getFlexValue(item.measurements.left, 1);
+                        const pFlexFW = getFlexValue(item.measurements.frameWidth, 3);
+                        const pFlexR = getFlexValue(item.measurements.right, 1);
+                        const pFlexT = getFlexValue(item.measurements.top, 1);
+                        const pFlexFH = getFlexValue(item.measurements.frameHeight, 3);
+                        const pFlexB = getFlexValue(item.measurements.bottom, 1);
 
-                      return (
-                      <div key={idx} className="border border-gray-400 rounded p-2 flex flex-col items-center justify-start relative text-xs">
-                        <div className="w-full bg-slate-100 p-1 mb-1 text-center rounded border border-slate-200 flex flex-col">
-                          <span className="font-bold">{item.customerName} : {item.roomName} : {item.name}</span>
-                          {item.roomRemark && <span className="text-[7px] text-slate-500 italic mt-0.5 text-left bg-white px-1 border border-slate-100">* {item.roomRemark}</span>}
-                        </div>
-                        
-                        <div className="relative w-[95%] h-[65%] mt-1">
-                          <div className="w-full h-full grid"
-                            style={{ gridTemplateColumns: `20px ${pFlexL}fr ${pFlexFW}fr ${pFlexR}fr 35px`, gridTemplateRows: `15px 15px ${pFlexT}fr ${pFlexFH}fr ${pFlexB}fr` }}>
-                             
-                             <div className="col-start-2 col-end-5 row-start-1 flex flex-col justify-end">
-                               <div className="text-center text-blue-600 text-[8px] font-bold">กว้างเต็ม: {item.measurements.totalWidth || '-'}</div>
-                               <div className="w-full border-b border-blue-400 h-1 border-l border-r mb-0.5"></div>
-                             </div>
-                             <div className="col-start-1 row-start-3 row-end-6 flex flex-row items-center justify-end pr-0.5">
-                               <div className="h-full border-r border-blue-400 w-1 border-t border-b"></div>
-                               <div className="text-blue-600 text-[8px] font-bold -rotate-90 whitespace-nowrap">สูงเต็ม: {item.measurements.totalHeight || '-'}</div>
-                             </div>
-
-                             <div className="col-start-2 row-start-2 flex items-end justify-center pb-0.5 border-b border-r border-orange-500 text-orange-700 font-bold text-[7px]">ซ้าย: {item.measurements.left !== '' ? item.measurements.left : '-'}</div>
-                             <div className="col-start-3 row-start-2 flex items-end justify-center pb-0.5 border-b border-r border-orange-500 text-orange-700 font-bold text-[7px]">กว้าง: {item.measurements.frameWidth !== '' ? item.measurements.frameWidth : '-'}</div>
-                             <div className="col-start-4 row-start-2 flex items-end justify-center pb-0.5 border-b border-orange-500 text-orange-700 font-bold text-[7px]">ขวา: {item.measurements.right !== '' ? item.measurements.right : '-'}</div>
-
-                             <div className="col-start-5 row-start-3 flex items-center justify-start pl-1 border-l border-b border-orange-500 text-orange-700 font-bold text-[7px]">บน: {item.measurements.top !== '' ? item.measurements.top : '-'}</div>
-                             <div className="col-start-5 row-start-4 flex items-center justify-start pl-1 border-l border-b border-orange-500 text-orange-700 font-bold text-[7px]">สูง: {item.measurements.frameHeight !== '' ? item.measurements.frameHeight : '-'}</div>
-                             <div className="col-start-5 row-start-5 flex items-center justify-start pl-1 border-l border-orange-500 text-orange-700 font-bold text-[7px]">ล่าง: {item.measurements.bottom !== '' ? item.measurements.bottom : '-'}</div>
-
-                             <div className="col-start-3 row-start-3 flex flex-col items-center justify-center border-x border-dashed border-slate-200 gap-[1px]">
-                                {getObstaclesBySide(item.measurements.obstacles, 'top').map((o, i) => (<span key={i} className="text-[5px] font-bold text-purple-800 bg-purple-100 rounded px-0.5">{o.label}:{o.value}</span>))}
-                             </div>
-                             <div className="col-start-2 row-start-4 flex flex-col items-center justify-center border-y border-dashed border-slate-200 gap-[1px]">
-                                {getObstaclesBySide(item.measurements.obstacles, 'left').map((o, i) => (<span key={i} className="text-[5px] font-bold text-purple-800 bg-purple-100 rounded px-0.5">{o.label}:{o.value}</span>))}
-                             </div>
-                             <div className="col-start-4 row-start-4 flex flex-col items-center justify-center border-y border-dashed border-slate-200 gap-[1px]">
-                                {getObstaclesBySide(item.measurements.obstacles, 'right').map((o, i) => (<span key={i} className="text-[5px] font-bold text-purple-800 bg-purple-100 rounded px-0.5">{o.label}:{o.value}</span>))}
-                             </div>
-                             <div className="col-start-3 row-start-5 flex flex-col items-center justify-center border-x border-dashed border-slate-200 gap-[1px]">
-                                {getObstaclesBySide(item.measurements.obstacles, 'bottom').map((o, i) => (<span key={i} className="text-[5px] font-bold text-purple-800 bg-purple-100 rounded px-0.5">{o.label}:{o.value}</span>))}
-                             </div>
-
-                             <div className="col-start-3 row-start-4 border-[1.5px] border-slate-800 bg-white relative">
-                               <div className="w-full h-px bg-slate-300 absolute top-1/2"></div><div className="h-full w-px bg-slate-300 absolute left-1/2"></div>
-                             </div>
+                        return (
+                        <div key={idx} className="border border-gray-400 rounded p-2 flex flex-col items-center justify-start relative text-xs">
+                          <div className="w-full bg-slate-100 p-1 mb-1 text-center rounded border border-slate-200 flex flex-col">
+                            <span className="font-bold">{item.customerName} : {item.roomName} : {item.name}</span>
+                            {item.roomRemark && <span className="text-[7px] text-slate-500 italic mt-0.5 text-left bg-white px-1 border border-slate-100">* {item.roomRemark}</span>}
                           </div>
-                        </div>
+                          
+                          <div className="relative w-[95%] h-[65%] mt-1">
+                            <div className="w-full h-full grid"
+                              style={{ gridTemplateColumns: `20px ${pFlexL}fr ${pFlexFW}fr ${pFlexR}fr 35px`, gridTemplateRows: `15px 15px ${pFlexT}fr ${pFlexFH}fr ${pFlexB}fr` }}>
+                               
+                               <div className="col-start-2 col-end-5 row-start-1 flex flex-col justify-end">
+                                 <div className="text-center text-blue-600 text-[8px] font-bold">กว้างเต็ม: {item.measurements.totalWidth || '-'}</div>
+                                 <div className="w-full border-b border-blue-400 h-1 border-l border-r mb-0.5"></div>
+                               </div>
+                               <div className="col-start-1 row-start-3 row-end-6 flex flex-row items-center justify-end pr-0.5">
+                                 <div className="h-full border-r border-blue-400 w-1 border-t border-b"></div>
+                                 <div className="text-blue-600 text-[8px] font-bold -rotate-90 whitespace-nowrap">สูงเต็ม: {item.measurements.totalHeight || '-'}</div>
+                               </div>
 
-                        {item.measurements.remark && (
-                          <div className="w-[95%] mt-auto p-1.5 border border-yellow-300 bg-yellow-50 text-[8px] text-yellow-800 rounded mb-1">
-                            <b>หมายเหตุบาน:</b> {item.measurements.remark}
+                               <div className="col-start-2 row-start-2 flex items-end justify-center pb-0.5 border-b border-r border-orange-500 text-orange-700 font-bold text-[7px]">ซ้าย: {item.measurements.left !== '' ? item.measurements.left : '-'}</div>
+                               <div className="col-start-3 row-start-2 flex items-end justify-center pb-0.5 border-b border-r border-orange-500 text-orange-700 font-bold text-[7px]">กว้าง: {item.measurements.frameWidth !== '' ? item.measurements.frameWidth : '-'}</div>
+                               <div className="col-start-4 row-start-2 flex items-end justify-center pb-0.5 border-b border-orange-500 text-orange-700 font-bold text-[7px]">ขวา: {item.measurements.right !== '' ? item.measurements.right : '-'}</div>
+
+                               <div className="col-start-5 row-start-3 flex items-center justify-start pl-1 border-l border-b border-orange-500 text-orange-700 font-bold text-[7px]">บน: {item.measurements.top !== '' ? item.measurements.top : '-'}</div>
+                               <div className="col-start-5 row-start-4 flex items-center justify-start pl-1 border-l border-b border-orange-500 text-orange-700 font-bold text-[7px]">สูง: {item.measurements.frameHeight !== '' ? item.measurements.frameHeight : '-'}</div>
+                               <div className="col-start-5 row-start-5 flex items-center justify-start pl-1 border-l border-orange-500 text-orange-700 font-bold text-[7px]">ล่าง: {item.measurements.bottom !== '' ? item.measurements.bottom : '-'}</div>
+
+                               <div className="col-start-3 row-start-3 flex flex-col items-center justify-center border-x border-dashed border-slate-200 gap-[1px]">
+                                  {getObstaclesBySide(item.measurements.obstacles, 'top').map((o, i) => (<span key={i} className="text-[5px] font-bold text-purple-800 bg-purple-100 rounded px-0.5">{o.label}:{o.value}</span>))}
+                               </div>
+                               <div className="col-start-2 row-start-4 flex flex-col items-center justify-center border-y border-dashed border-slate-200 gap-[1px]">
+                                  {getObstaclesBySide(item.measurements.obstacles, 'left').map((o, i) => (<span key={i} className="text-[5px] font-bold text-purple-800 bg-purple-100 rounded px-0.5">{o.label}:{o.value}</span>))}
+                               </div>
+                               <div className="col-start-4 row-start-4 flex flex-col items-center justify-center border-y border-dashed border-slate-200 gap-[1px]">
+                                  {getObstaclesBySide(item.measurements.obstacles, 'right').map((o, i) => (<span key={i} className="text-[5px] font-bold text-purple-800 bg-purple-100 rounded px-0.5">{o.label}:{o.value}</span>))}
+                               </div>
+                               <div className="col-start-3 row-start-5 flex flex-col items-center justify-center border-x border-dashed border-slate-200 gap-[1px]">
+                                  {getObstaclesBySide(item.measurements.obstacles, 'bottom').map((o, i) => (<span key={i} className="text-[5px] font-bold text-purple-800 bg-purple-100 rounded px-0.5">{o.label}:{o.value}</span>))}
+                               </div>
+
+                               <div className="col-start-3 row-start-4 border-[1.5px] border-slate-800 bg-white relative">
+                                 <div className="w-full h-px bg-slate-300 absolute top-1/2"></div><div className="h-full w-px bg-slate-300 absolute left-1/2"></div>
+                               </div>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    )})}
+
+                          {item.measurements.remark && (
+                            <div className="w-[95%] mt-auto p-1.5 border border-yellow-300 bg-yellow-50 text-[8px] text-yellow-800 rounded mb-1">
+                              <b>หมายเหตุบาน:</b> {item.measurements.remark}
+                            </div>
+                          )}
+                        </div>
+                      )})}
+                    </div>
                   </div>
-                </div>
-              ))
-            )}
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
